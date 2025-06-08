@@ -1,6 +1,11 @@
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 class GelatoRegister extends StatefulWidget {
   const GelatoRegister({super.key, required this.isEdit, this.docId});
@@ -21,6 +26,10 @@ class _GelatoRegisterState extends State<GelatoRegister> {
   final TextEditingController priceController = TextEditingController();
   final TextEditingController unitController = TextEditingController();
   final TextEditingController typeController = TextEditingController();
+
+  File? _selectedImage;
+  final ImagePicker _picker = ImagePicker();
+  String? _imageUrl;
 
   bool isActive = false;
 
@@ -46,11 +55,83 @@ class _GelatoRegisterState extends State<GelatoRegister> {
           typeController.text = data['type'] ?? '';
           isActive = data['isActive'] ?? false;
         });
+        if (data['imageUrl'] != null) {
+          setState(() {
+            _imageUrl = data['imageUrl'];
+          });
+        }
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Erro ao carregar gelato: $e')),
       );
+    }
+  }
+
+  Future<void> _showImageSourceActionSheet() async {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('Escolher da Galeria'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt),
+                title: const Text('Tirar Foto'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final pickedFile = await _picker.pickImage(
+      source: source,
+      maxHeight: 600,
+      maxWidth: 600,
+    );
+
+    if (pickedFile != null) {
+      setState(() {
+        _selectedImage = File(pickedFile.path);
+      });
+    }
+  }
+
+  Future<String?> _uploadImage(File imageFile) async {
+    try {
+      Uint8List imageBytes = await imageFile.readAsBytes();
+
+      final fileName = DateTime.now().millisecondsSinceEpoch.toString();
+      final storageRef = FirebaseStorage.instance.ref().child('gelatos/$fileName.jpg');
+
+      final uploadTask = await storageRef.putData(imageBytes);
+
+      final downloadUrl = await uploadTask.ref.getDownloadURL();
+      return downloadUrl;
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erro ao fazer upload da imagem: $e')),
+      );
+      return null;
     }
   }
 
@@ -126,10 +207,20 @@ class _GelatoRegisterState extends State<GelatoRegister> {
             style: TextStyle(fontSize: 18),
           ),
         ),
-        SizedBox(height: 10),
-        CircleAvatar(
-          radius: 60,
-          backgroundImage: NetworkImage('https://picsum.photos/200/300'),
+        const SizedBox(height: 10),
+        GestureDetector(
+          // onTap: _showImageSourceActionSheet,
+          child: CircleAvatar(
+            radius: 60,
+            backgroundImage: _selectedImage != null
+                ? FileImage(_selectedImage!)
+                : (_imageUrl != null ? NetworkImage(_imageUrl!) : const NetworkImage('https://picsum.photos/200/300'))
+                    as ImageProvider,
+            child: Align(
+              alignment: Alignment.bottomRight,
+              child: Icon(Icons.camera_alt, color: Colors.white, size: 24),
+            ),
+          ),
         ),
       ],
     );
@@ -241,6 +332,13 @@ class _GelatoRegisterState extends State<GelatoRegister> {
         ),
         onPressed: () async {
           if (_formKey.currentState!.validate()) {
+            String? imageUrl;
+
+            if (_selectedImage != null) {
+              imageUrl = await _uploadImage(_selectedImage!);
+              if (imageUrl == null) return;
+            }
+
             final gelatoData = {
               'name': nameController.text,
               'description': descriptionController.text,
@@ -250,27 +348,23 @@ class _GelatoRegisterState extends State<GelatoRegister> {
               'type': typeController.text,
               'isActive': isActive,
               'createdAt': FieldValue.serverTimestamp(),
+              if (imageUrl != null) 'imageUrl': imageUrl,
             };
 
             try {
               if (widget.isEdit && widget.docId != null) {
                 await FirebaseFirestore.instance.collection('gelatos').doc(widget.docId).update(gelatoData);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Gelato atualizado com sucesso!')),
-                );
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Gelato atualizado com sucesso!')));
                 context.goNamed('mainList');
               } else {
                 await FirebaseFirestore.instance.collection('gelatos').add(gelatoData);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Gelato adicionado com sucesso!')),
-                );
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Gelato adicionado com sucesso!')));
                 context.goNamed('mainList');
               }
             } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Erro ao salvar gelato: $e')),
-              );
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro ao salvar gelato: $e')));
             }
           }
         },
